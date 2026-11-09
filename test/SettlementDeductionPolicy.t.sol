@@ -375,6 +375,12 @@ contract SettlementDeductionPolicyTest is Test {
             if (_payWith(id, mid)) hi = mid; else lo = mid;
         }
         for (uint256 g = hi - 1_000; g <= hi + 1_000; g++) _payWith(id, g);
+        // Just below the smallest budget that settles, the refusal is the escrow's own
+        // starvation check, not an incidental out-of-gas.
+        vm.prank(creator);
+        (bool ok, bytes memory ret) = address(escrow).call{gas: hi - 1}(abi.encodeCall(escrow.pay, (id, worker)));
+        assertFalse(ok);
+        assertEq(ret, abi.encodeWithSignature("Error(string)", "Escrow: gas"), "starvation check");
     }
 
     /// Pays with exactly `g` gas, checks a successful payout took the deductions, and rolls back.
