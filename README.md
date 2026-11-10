@@ -49,7 +49,7 @@ forge test
 This is a draft standard. The interfaces may change during discussion. The code has not
 been audited; do not use it to hold real funds.
 
-Discussion: link to follow (Ethereum Magicians).
+Discussion: [Ethereum Magicians](https://ethereum-magicians.org/t/erc-settlement-deductions-for-task-escrows/30323).
 
 ## License
 

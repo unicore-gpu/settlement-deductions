@@ -75,11 +75,19 @@ contract SpecCoverageTest is Test {
     }
 
     // ------------------------------------------------------------ construction
+    /// try/catch rather than expectRevert: with dynamic test linking, an expected revert
+    /// in a `new` ends the test early and skips the checks after it.
+    function _refused(address escrow_, uint16 cap, string memory why) internal {
+        try new SettlementDeductionPolicy(escrow_, schedule, cap) returns (SettlementDeductionPolicy) {
+            assertTrue(false, string.concat("deployed, expected: ", why));
+        } catch Error(string memory got) {
+            assertEq(got, why);
+        }
+    }
+
     function test_constructor_rejects_zero_escrow_and_cap_above_100() public {
-        vm.expectRevert("Deductions: zero escrow");
-        new SettlementDeductionPolicy(address(0), schedule, 100);
-        vm.expectRevert("Deductions: cap above 100%");
-        new SettlementDeductionPolicy(address(1), schedule, 10_001);
+        _refused(address(0), 100, "Deductions: zero escrow");
+        _refused(address(1), 10_001, "Deductions: cap above 100%");
         SettlementDeductionPolicy p = new SettlementDeductionPolicy(address(1), schedule, 10_000);
         assertEq(p.escrow(), address(1));
         assertEq(address(p.taxSchedule()), address(schedule));
