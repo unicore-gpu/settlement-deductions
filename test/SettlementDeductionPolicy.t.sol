@@ -69,7 +69,7 @@ contract SettlementDeductionPolicyTest is Test {
     address creator  = address(0xC4EA);
     address worker   = address(0xCAFE);
     address treasury = address(0x7EA5);
-    address insurer  = address(0x1A5);
+    address referrer = address(0x1A5);
     address lender   = address(0x10A1);
     address rando    = address(0xBAD);
     uint256 constant U = 1e6;
@@ -107,7 +107,7 @@ contract SettlementDeductionPolicyTest is Test {
     function test_design_example() public {
         uint256 id = _task(100 * U);
         vm.startPrank(worker);
-        p.assignPayment(id, insurer, 200, 0);    // premium 2%
+        p.assignPayment(id, referrer, 200, 0);    // fee 2%
         p.assignPayment(id, lender, 0, 30 * U);  // repay 30
         vm.stopPrank();
         _pay(id);
@@ -115,16 +115,16 @@ contract SettlementDeductionPolicyTest is Test {
         assertEq(usd.balanceOf(worker), 67 * U);
         assertEq(escrow.creditOf(id, address(p)), 33 * U, "one total credited to the policy");
         assertEq(p.owedOf(id, treasury), 1 * U);
-        assertEq(p.owedOf(id, insurer), 2 * U);
+        assertEq(p.owedOf(id, referrer), 2 * U);
         assertEq(p.owedOf(id, lender), 30 * U);
 
         vm.startPrank(rando); // anyone may trigger; money goes to the recipient
         p.claim(id, treasury);
-        p.claim(id, insurer);
+        p.claim(id, referrer);
         p.claim(id, lender);
         vm.stopPrank();
         assertEq(usd.balanceOf(treasury), 1 * U);
-        assertEq(usd.balanceOf(insurer), 2 * U);
+        assertEq(usd.balanceOf(referrer), 2 * U);
         assertEq(usd.balanceOf(lender), 30 * U);
         assertEq(usd.balanceOf(address(p)), 0, "policy keeps nothing");
         assertEq(usd.balanceOf(address(escrow)), 0);
@@ -213,14 +213,14 @@ contract SettlementDeductionPolicyTest is Test {
     function test_only_the_recipient_releases() public {
         uint256 id = _task(100 * U);
         vm.prank(worker);
-        p.assignPayment(id, insurer, 200, 0);
+        p.assignPayment(id, referrer, 200, 0);
         vm.prank(worker);
         vm.expectRevert("Deductions: nothing to release");
         p.release(id, worker);
-        vm.prank(insurer);
+        vm.prank(referrer);
         p.release(id, worker);
         _pay(id);
-        assertEq(p.owedOf(id, insurer), 0, "released premium is not taken");
+        assertEq(p.owedOf(id, referrer), 0, "released fee is not taken");
         assertEq(usd.balanceOf(worker), 99 * U);
     }
 
@@ -232,7 +232,7 @@ contract SettlementDeductionPolicyTest is Test {
         vm.stopPrank();
         vm.startPrank(worker);
         pp.assignPayment(id, lender, 0, 1 * U);   // will be exhausted
-        pp.assignPayment(id, insurer, 100, 0);    // stays
+        pp.assignPayment(id, referrer, 100, 0);    // stays
         pp.assignPayment(id, rando, 0, 100 * U);  // will be released
         pp.assignPayment(id, treasury, 0, 2 * U); // stays
         vm.stopPrank();
@@ -247,7 +247,7 @@ contract SettlementDeductionPolicyTest is Test {
         pp.assignPayment(id, creator, 0, 5 * U);   // fifth assignment fits after compaction
         ISettlementDeductionPolicy.Assignment[] memory list = pp.assignmentsOf(id, worker);
         assertEq(list.length, 3);
-        assertEq(list[0].recipient, insurer);
+        assertEq(list[0].recipient, referrer);
         assertEq(list[1].recipient, treasury);
         assertEq(list[2].recipient, creator, "new assignment served last");
     }

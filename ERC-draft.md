@@ -2,7 +2,7 @@
 eip: TBD
 title: Settlement Deductions for Task Escrows
 description: A fixed policy that an escrow asks at every payout how much to withhold for third parties, without being able to stall settlement
-author: TBD (@unicore-gpu)
+author: Ben (@unicore-gpu)
 discussions-to: TBD
 status: Draft
 type: Standards Track
@@ -13,18 +13,18 @@ requires: 20
 
 ## Abstract
 
-This ERC lets an escrow that pays for work withhold part of each payout for third parties (a tax, an insurance premium, a loan repayment) without knowing any of their rules, and without letting any of them delay the payout. It specifies:
+This ERC lets an escrow that pays for work withhold part of each payout for third parties (a tax, a referral fee, a loan repayment) without knowing any of their rules, and without letting any of them delay the payout. It specifies:
 
 1. a **deduction policy** interface: the escrow names one policy for its whole lifetime, tells it about every new task, and at every payout asks it for a single number, the amount it takes;
 2. an **escrow side**: two calls, one credit ledger and two events, with guarantees that make a policy safe to plug in: the policy always runs on a fixed gas budget that no caller can starve, a failing or invalid policy settles the payout in full, refunds never reach the policy, and no deduction recipient is called during settlement;
-3. a normative-optional **reference policy profile**: a public tax schedule locked per task at creation, and premiums and repayments that only the payee can assign on its own payouts and only their recipient can release, all under one cap.
+3. a normative-optional **reference policy profile**: a public tax schedule locked per task at creation, and referral fees and repayments that only the payee can assign on its own payouts and only their recipient can release, all under one cap.
 
 ## Motivation
 
 Agent work is increasingly paid through on-chain escrows: task tenders that escrow a bounty and pay a fulfiller on acceptance, and job escrows such as [ERC-8183](./eip-8183.md) that release a budget to a provider when an evaluator completes the job. At the moment of payment, more parties than the payee often have a claim on the money:
 
 - **Public services.** A network that funds shared infrastructure (dispute resolution, monitoring, public data) from a small tax on settled work needs the tax to reach every task in the market, at a rate fixed when the task was created.
-- **Insurance.** A payee that insures its work pays a premium per job, most naturally as a share of each payment.
+- **Referrals.** A payee that won a job through a referrer owes it a fee, most naturally as a share of each payment.
 - **Credit.** A lender that advances working capital against a task the payee has already won needs to be repaid out of that task's payment before the payee receives it: receivables financing. A lender only advances against an assignment the payee cannot undo.
 
 Existing escrows offer two options. They pay the payee in full and leave every such claim to the payee's goodwill, or they hard-code one fee. Hooks chosen per job by the client can be left out by the client, and a hook that reverts blocks the job by design. Neither gives a tax that cannot be avoided, a repayment a lender can rely on, or a guarantee that the payee is paid even when the deduction logic fails.
@@ -156,7 +156,7 @@ interface ISettlementDeductionPolicy is ISettlementDeductions {
 
 **One number, not a list.** The escrow learns only the total it must set aside; dividing it among recipients happens in the policy. This keeps the escrow side to a few dozen lines, which matters for escrows already close to the 24,576-byte contract size limit, and it keeps the escrow's storage and event surface independent of how many kinds of deduction exist. Returning a list of `(recipient, amount)` pairs was considered and rejected: it moves the policy's bookkeeping into every escrow.
 
-**Credit, not push.** What the policy takes is credited and withdrawn later, the same pattern escrows already use for payouts whose recipient refuses them. No treasury, insurer or lender is called during settlement, so none of them can block it or re-enter it. The receive hooks of [ERC-777](./eip-777.md) showed what follows when settlement depends on the recipient's code.
+**Credit, not push.** What the policy takes is credited and withdrawn later, the same pattern escrows already use for payouts whose recipient refuses them. No treasury, referrer or lender is called during settlement, so none of them can block it or re-enter it. The receive hooks of [ERC-777](./eip-777.md) showed what follows when settlement depends on the recipient's code.
 
 **One policy per escrow, for life.** A tax that the task creator can switch off is voluntary. Naming the policy at the escrow level, and locking per-task terms at creation, makes the deduction a property of the market a task is posted in; anyone who does not want it posts elsewhere. Per-job hooks chosen by the client, the alternative, cannot carry a tax.
 
@@ -164,7 +164,7 @@ interface ISettlementDeductionPolicy is ISettlementDeductions {
 
 **Guaranteed gas.** Under the 63/64 rule of [EIP-150](./eip-150.md), a caller could otherwise pass just enough gas for the policy call to fail while the payout still succeeds, settling in full and skipping a lender. With the check, a failure inside the full budget is a genuine policy failure.
 
-**Payee consent for assignments, recipient consent for release.** Premiums and repayments are the payee's own decisions, so only the payee can create them. The payee cannot withdraw them, because a lender only advances money against an assignment that cannot be withdrawn after the advance. The recipient can release them, because the protection exists for the recipient: a lender repaid another way, or an insurer whose cover has ended, must be able to let the payee go, and the slot it frees can be used for new financing.
+**Payee consent for assignments, recipient consent for release.** Referral fees and repayments are the payee's own decisions, so only the payee can create them. The payee cannot withdraw them, because a lender only advances money against an assignment that cannot be withdrawn after the advance. The recipient can release them, because the protection exists for the recipient: a lender repaid another way, or a referrer that waives its fee, must be able to let the payee go, and the slot it frees can be used for new financing.
 
 **Relation to existing work.** [ERC-8183](./eip-8183.md) allows an optional platform fee, in basis points, paid to a configurable treasury on completion and never on refund, and optional hooks set per job by the client. Its fee is a single fixed rate, and its hooks may revert to block an action by design. This ERC generalises the fee into an external policy with per-task locking and payee assignments, and keeps payouts live when the policy fails; an ERC-8183 implementation can meet it by routing its fee through a policy. [ERC-2981](./eip-2981.md) reports royalty information that a marketplace may choose to honour; deductions here are enforced by the escrow. Repay-first routing at the level of an agent's revenue address works on all of an agent's income; this ERC works on one escrowed task, which is what a lender advancing against a specific won task needs. The two compose.
 
@@ -178,12 +178,12 @@ This ERC is additive. An escrow without a policy behaves exactly as before. Escr
 
 **Event topics.** `SettlementDeducted(uint256,uint256,address,uint256)` = `0xd6a50990fa5d56f79112ecd39bb97ad451c1b9cea471098009151950b037826d`; `DeductionsSkipped(uint256,uint256)` = `0x12518d49b1ef011e575513a1e510df3de4f1682fcef7750bea4d80717e6e54d1`.
 
-**Worked example.** Reference policy with `maxDeductionBps = 5000`, tax 1% locked at creation; the payee assigned a 2% premium to an insurer and a fixed 30 to a lender, in that order. One payout of 100:
+**Worked example.** Reference policy with `maxDeductionBps = 5000`, tax 1% locked at creation; the payee assigned a 2% referral fee to a referrer and a fixed 30 to a lender, in that order. One payout of 100:
 
 | recipient | deduction | `owedOf` after |
 |---|---|---|
 | treasury (tax 1%) | 1 | 1 |
-| insurer (premium 2%) | 2 | 2 |
+| referrer (referral fee 2%) | 2 | 2 |
 | lender (fixed 30) | 30 | 30 |
 | policy credit in the escrow | 33 | — |
 | payee | 67 | — |
@@ -200,7 +200,7 @@ After `claim` for all three recipients, the policy and the escrow hold nothing f
 
 **Invariants.** Under any sequence of the actions above: the escrow holds exactly what is still escrowed plus what is credited; for every task, what was deducted equals what is still credited, owed or claimed; the policy holds exactly what has been withdrawn and not yet claimed; and every claim of a nonzero `owedOf` succeeds.
 
-**Release.** After the insurer releases a 2% premium, a payout of 100 deducts only the tax (1). With four assignments of which one is exhausted and one released, a fifth assignment is accepted and is served after the two remaining ones.
+**Release.** After the referrer releases a 2% referral fee, a payout of 100 deducts only the tax (1). With four assignments of which one is exhausted and one released, a fifth assignment is accepted and is served after the two remaining ones.
 
 ## Reference Implementation
 

@@ -40,7 +40,7 @@ contract SpecCoverageTest is Test {
     address creator  = address(0xC4EA);
     address worker   = address(0xCAFE);
     address treasury = address(0x7EA5);
-    address insurer  = address(0x1A5);
+    address referrer = address(0x1A5);
     address lender   = address(0x10A1);
     address rando    = address(0xBAD);
     uint256 constant U = 1e6;
@@ -153,7 +153,7 @@ contract SpecCoverageTest is Test {
         (SettlementDeductionPolicy p, ExampleEscrow e) = _deploy(schedule, 5000);
         uint256 id = _task(e, 100 * U);
         vm.startPrank(worker);
-        p.assignPayment(id, insurer, 200, 0);
+        p.assignPayment(id, referrer, 200, 0);
         p.assignPayment(id, lender, 0, 30 * U);
         vm.stopPrank();
         vm.startStateDiffRecording();
@@ -201,13 +201,13 @@ contract SpecCoverageTest is Test {
         (SettlementDeductionPolicy p, ExampleEscrow e) = _deploy(schedule, 1000); // cap 10%
         uint256 id = _task(e, 200 * U);
         vm.startPrank(worker);
-        p.assignPayment(id, insurer, 500, 0);  // 5%, made first
+        p.assignPayment(id, referrer, 500, 0);  // 5%, made first
         p.assignPayment(id, lender, 0, 50 * U); // made second
         vm.stopPrank();
         vm.startPrank(creator);
-        e.payPart(id, worker, 100 * U); // budget 10: tax 1, premium 5, repay 4
+        e.payPart(id, worker, 100 * U); // budget 10: tax 1, fee 5, repay 4
         assertEq(p.owedOf(id, treasury), 1 * U);
-        assertEq(p.owedOf(id, insurer), 5 * U);
+        assertEq(p.owedOf(id, referrer), 5 * U);
         assertEq(p.owedOf(id, lender), 4 * U);
         e.payPart(id, worker, 100 * U); // the same again; 42 still to repay
         vm.stopPrank();
@@ -236,7 +236,7 @@ contract SpecCoverageTest is Test {
         uint256 id = _task(e, 100 * U);
         vm.startPrank(worker);
         vm.expectRevert("Deductions: rate above cap");
-        p.assignPayment(id, insurer, 1, 0);
+        p.assignPayment(id, referrer, 1, 0);
         p.assignPayment(id, lender, 0, 30 * U); // accepted, but the cap leaves no room
         vm.stopPrank();
         vm.prank(creator);
@@ -261,20 +261,20 @@ contract SpecCoverageTest is Test {
         (SettlementDeductionPolicy p, ExampleEscrow e) = _deploy(schedule, 5000);
         uint256 id = _task(e, 100 * U);
         vm.startPrank(worker);
-        p.assignPayment(id, insurer, 200, 0);
+        p.assignPayment(id, referrer, 200, 0);
         p.assignPayment(id, lender, 0, 30 * U);
-        p.assignPayment(id, insurer, 0, 5 * U);
+        p.assignPayment(id, referrer, 0, 5 * U);
         vm.stopPrank();
         vm.expectEmit(address(p));
-        emit ISettlementDeductionPolicy.PaymentReleased(id, worker, insurer);
-        vm.prank(insurer);
-        p.release(id, worker); // both of the insurer's, none of the lender's
-        vm.prank(insurer);
+        emit ISettlementDeductionPolicy.PaymentReleased(id, worker, referrer);
+        vm.prank(referrer);
+        p.release(id, worker); // both of the referrer's, none of the lender's
+        vm.prank(referrer);
         vm.expectRevert("Deductions: nothing to release");
         p.release(id, worker);
         vm.prank(creator);
         e.pay(id, worker);
-        assertEq(p.owedOf(id, insurer), 0);
+        assertEq(p.owedOf(id, referrer), 0);
         assertEq(p.owedOf(id, lender), 30 * U);
     }
 
@@ -322,7 +322,7 @@ contract SpecCoverageTest is Test {
         SettlementDeductionPolicy p = new SettlementDeductionPolicy(address(this), schedule, cap);
         p.onTaskCreated(1, address(usd), amount);
         vm.startPrank(worker);
-        if (rate <= cap) p.assignPayment(1, insurer, rate, 0);
+        if (rate <= cap) p.assignPayment(1, referrer, rate, 0);
         p.assignPayment(1, lender, 0, sum);
         vm.stopPrank();
 
@@ -333,14 +333,14 @@ contract SpecCoverageTest is Test {
         assertLe(total, budget, "within the cap");
         assertLe(total, amount, "never more than the payout");
         assertEq(p.owedOf(1, treasury), taxed, "tax exact and first");
-        uint256 premium = p.owedOf(1, insurer);
+        uint256 fee = p.owedOf(1, referrer);
         uint256 repaid = p.owedOf(1, lender);
-        assertEq(taxed + premium + repaid, total, "total is the sum of shares");
+        assertEq(taxed + fee + repaid, total, "total is the sum of shares");
         if (rate <= cap) {
             uint256 want = amount * rate / 10_000;
-            assertEq(premium, want < budget - taxed ? want : budget - taxed, "premium before repayment");
+            assertEq(fee, want < budget - taxed ? want : budget - taxed, "fee before repayment");
         }
-        assertEq(repaid, _min(sum, budget - taxed - premium), "repayment takes what is left");
+        assertEq(repaid, _min(sum, budget - taxed - fee), "repayment takes what is left");
         assertEq(p.assignmentsOf(1, worker)[rate <= cap ? 1 : 0].remaining, sum - repaid, "carry-over kept");
     }
 
@@ -354,7 +354,7 @@ contract SpecCoverageTest is Test {
         usd.mint(creator, amount);
         uint256 id = _task(e, amount);
         vm.startPrank(worker);
-        p.assignPayment(id, insurer, rate, 0);
+        p.assignPayment(id, referrer, rate, 0);
         p.assignPayment(id, lender, 0, sum);
         vm.stopPrank();
         uint256 paid;
@@ -369,9 +369,9 @@ contract SpecCoverageTest is Test {
         uint256 credited = e.creditOf(id, address(p));
         assertEq(usd.balanceOf(worker) + credited, amount, "nothing created or lost");
         assertLe(credited, amount / 2, "cap holds across payouts");
-        assertEq(p.owedOf(id, treasury) + p.owedOf(id, insurer) + p.owedOf(id, lender), credited);
+        assertEq(p.owedOf(id, treasury) + p.owedOf(id, referrer) + p.owedOf(id, lender), credited);
         if (p.owedOf(id, treasury) > 0) p.claim(id, treasury);
-        if (p.owedOf(id, insurer) > 0) p.claim(id, insurer);
+        if (p.owedOf(id, referrer) > 0) p.claim(id, referrer);
         if (p.owedOf(id, lender) > 0) p.claim(id, lender);
         assertEq(usd.balanceOf(address(p)), 0, "policy keeps nothing");
         assertEq(usd.balanceOf(address(e)), 0, "escrow keeps nothing");

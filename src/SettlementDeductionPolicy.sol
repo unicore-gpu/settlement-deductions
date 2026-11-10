@@ -5,18 +5,18 @@ import {ISettlementDeductions, ISettlementCredit} from "./interfaces/ISettlement
 import {ISettlementDeductionPolicy} from "./interfaces/ISettlementDeductionPolicy.sol";
 import {ITaxSchedule} from "./interfaces/ITaxSchedule.sol";
 
-/// @title  SettlementDeductionPolicy — reference policy: tax, premiums, repayments.
+/// @title  SettlementDeductionPolicy — reference policy: tax, referral fees, repayments.
 /// @notice Divides each payout before the payee is paid:
 ///
 ///           payout 100
 ///            ├─ tax        (public schedule, locked at task creation) → treasury
-///            ├─ premium    (payee's own assignment, a rate)           → insurer
+///            ├─ fee        (payee's own assignment, a rate)           → referrer
 ///            ├─ repayment  (payee's own assignment, a sum)            → lender
 ///            └─ remainder                                             → payee
 ///
 ///         Two sources, two consents. The tax belongs to the escrow's deployment: its
 ///         schedule is fixed here for life and snapshotted per task, so every task on that
-///         escrow carries it and nobody can create a task around it. Premiums and
+///         escrow carries it and nobody can create a task around it. Fees and
 ///         repayments belong to the payee: only the payee can assign part of its own
 ///         payouts on a task, and only the recipient can release an assignment, which is
 ///         what lets a lender advance money against a task already won.

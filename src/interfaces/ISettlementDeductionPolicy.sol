@@ -6,7 +6,7 @@ import {ITaxSchedule} from "./ITaxSchedule.sol";
 
 /// @title  ISettlementDeductionPolicy — the optional reference-policy profile.
 /// @notice A deduction policy with a public tax schedule locked per task, payee-made
-///         assignments (premiums as a rate, repayments as a fixed sum) that only their
+///         assignments (fees as a rate, repayments as a fixed sum) that only their
 ///         recipient can release, one cap on all deductions together, and permissionless
 ///         claims.
 interface ISettlementDeductionPolicy is ISettlementDeductions {

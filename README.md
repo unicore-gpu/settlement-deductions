@@ -1,13 +1,13 @@
 # Settlement Deductions
 
 A draft ERC and reference implementation for withholding part of an escrowed payment
-(a tax, an insurance premium, a loan repayment) at the moment it is paid out, without the
+(a tax, a referral fee, a loan repayment) at the moment it is paid out, without the
 escrow knowing any of the rules and without ever blocking the payment.
 
 ```
 payout 100
  ├─ tax 1%        → treasury   1
- ├─ premium 2%    → insurer    2
+ ├─ referral 2%   → referrer   2
  ├─ repayment     → lender    30
  └─ payee                     67
 ```
