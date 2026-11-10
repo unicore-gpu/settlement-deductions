@@ -29,7 +29,7 @@ to [ethereum/ERCs](https://github.com/ethereum/ERCs).
 | `src/interfaces/ITaxSchedule.sol` | A tax schedule the reference policy reads at task creation |
 | `src/SettlementDeductionPolicy.sol` | Reference policy: tax locked per task, payee-made assignments only their recipient can release, one cap, permissionless claims |
 | `src/examples/ExampleEscrow.sol` | The smallest escrow meeting the escrow requirements, with partial payouts and refunds (illustration only) |
-| `test/` | Foundry unit, fuzz and invariant tests: every normative rule, the worked example, cap carry-over, partial payouts, refunds, release, withdrawal by third parties, failing, starved and noisy policies, re-entry, interface identifiers |
+| `test/` | Foundry unit, fuzz and invariant tests: every normative rule, the worked example, cap carry-over, partial payouts, refunds, release, withdrawal by third parties, failing, starved and noisy policies, payees that refuse payment, no storage created at payout, re-entry, interface identifiers. They pass under the current gas schedule and under EIP-8037/8038 (`forge test --evm-version amsterdam`) |
 
 An ERC-8414 (token-bound task tenders) contract with the escrow side built in lives in the `settlement-deductions`
 branch of [unicore-gpu/task-token-standard](https://github.com/unicore-gpu/task-token-standard/tree/settlement-deductions).

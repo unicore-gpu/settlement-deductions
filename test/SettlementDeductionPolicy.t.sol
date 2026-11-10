@@ -55,6 +55,16 @@ contract LoudPolicy {
     }
 }
 
+/// Spends the same memory as LoudPolicy, but reverts with no return data.
+contract QuietHeavyPolicy {
+    function onTaskCreated(uint256, address, uint256) external {}
+    function deductions(uint256, uint256, address, uint256) external pure returns (uint256) {
+        // A read whose result is used, so the compiler cannot drop the memory expansion.
+        assembly { if iszero(mload(299968)) { revert(0, 0) } }
+        return 1;
+    }
+}
+
 contract GreedyPolicy {
     function onTaskCreated(uint256, address, uint256) external {}
     function deductions(uint256, uint256, address, uint256 a) external pure returns (uint256) { return a + 1; }
@@ -94,13 +104,13 @@ contract SettlementDeductionPolicyTest is Test {
     function _task(uint256 amount) internal returns (uint256 id) {
         vm.startPrank(creator);
         usd.approve(address(escrow), amount);
-        id = escrow.createTask(address(usd), amount);
+        id = escrow.createTask(address(usd), amount, worker);
         vm.stopPrank();
     }
 
     function _pay(uint256 id) internal {
         vm.prank(creator);
-        escrow.pay(id, worker);
+        escrow.pay(id);
     }
 
     // ------------------------------------------------ the design example: 1 / 2 / 30 / 67
@@ -145,7 +155,7 @@ contract SettlementDeductionPolicyTest is Test {
         vm.startPrank(creator);
         usd.approve(address(escrow), 1 * U);
         vm.expectRevert("Deductions: tax above cap");
-        escrow.createTask(address(usd), 1 * U);
+        escrow.createTask(address(usd), 1 * U, worker);
         vm.stopPrank();
     }
 
@@ -153,8 +163,8 @@ contract SettlementDeductionPolicyTest is Test {
         (SettlementDeductionPolicy pp, ExampleEscrow ee) = _deploy(ITaxSchedule(address(0)), 5000);
         vm.startPrank(creator);
         usd.approve(address(ee), 100 * U);
-        uint256 id = ee.createTask(address(usd), 100 * U);
-        ee.pay(id, worker);
+        uint256 id = ee.createTask(address(usd), 100 * U, worker);
+        ee.pay(id);
         vm.stopPrank();
         assertEq(usd.balanceOf(worker), 100 * U);
         assertEq(pp.owedOf(id, treasury), 0);
@@ -165,7 +175,7 @@ contract SettlementDeductionPolicyTest is Test {
         (SettlementDeductionPolicy pp, ExampleEscrow ee) = _deploy(schedule, 3000); // cap 30%
         vm.startPrank(creator);
         usd.approve(address(ee), 100 * U);
-        uint256 id = ee.createTask(address(usd), 100 * U);
+        uint256 id = ee.createTask(address(usd), 100 * U, worker);
         vm.stopPrank();
         vm.prank(worker);
         pp.assignPayment(id, lender, 0, 50 * U);
@@ -228,7 +238,7 @@ contract SettlementDeductionPolicyTest is Test {
         (SettlementDeductionPolicy pp, ExampleEscrow ee) = _deploy(ITaxSchedule(address(0)), 5000);
         vm.startPrank(creator);
         usd.approve(address(ee), 100 * U);
-        uint256 id = ee.createTask(address(usd), 100 * U);
+        uint256 id = ee.createTask(address(usd), 100 * U, worker);
         vm.stopPrank();
         vm.startPrank(worker);
         pp.assignPayment(id, lender, 0, 1 * U);   // will be exhausted
@@ -257,8 +267,8 @@ contract SettlementDeductionPolicyTest is Test {
         cb.mint(creator, 100 * U);
         vm.startPrank(creator);
         cb.approve(address(escrow), 100 * U);
-        uint256 id = escrow.createTask(address(cb), 100 * U);
-        escrow.pay(id, worker);
+        uint256 id = escrow.createTask(address(cb), 100 * U, worker);
+        escrow.pay(id);
         vm.stopPrank();
         cb.arm(address(p), abi.encodeCall(p.claim, (id, treasury)));
         vm.expectRevert("Escrow: transfer failed"); // the inner claim hit the guard
@@ -315,7 +325,7 @@ contract SettlementDeductionPolicyTest is Test {
     // ------------------------------------------------ native coin
     function test_native_coin() public {
         vm.prank(creator);
-        uint256 id = escrow.createTask{value: 1 ether}(address(0), 1 ether);
+        uint256 id = escrow.createTask{value: 1 ether}(address(0), 1 ether, worker);
         _pay(id);
         assertEq(worker.balance, 0.99 ether);
         p.claim(id, treasury);
@@ -326,20 +336,20 @@ contract SettlementDeductionPolicyTest is Test {
     function _escrowWith(address policy) internal returns (ExampleEscrow ee, uint256 id) {
         ee = new ExampleEscrow(ISettlementDeductions(policy));
         vm.prank(creator);
-        id = ee.createTask{value: 1 ether}(address(0), 1 ether);
+        id = ee.createTask{value: 1 ether}(address(0), 1 ether, worker);
     }
 
     function test_failing_policy_pays_in_full() public {
         (ExampleEscrow ee, uint256 id) = _escrowWith(address(new RevertingPolicy()));
         vm.prank(creator);
-        ee.pay(id, worker);
+        ee.pay(id);
         assertEq(worker.balance, 1 ether);
     }
 
     function test_invalid_answer_pays_in_full() public {
         (ExampleEscrow ee, uint256 id) = _escrowWith(address(new GreedyPolicy()));
         vm.prank(creator);
-        ee.pay(id, worker);
+        ee.pay(id);
         assertEq(worker.balance, 1 ether);
     }
 
@@ -348,18 +358,36 @@ contract SettlementDeductionPolicyTest is Test {
         vm.prank(worker);
         p.assignPayment(id, lender, 0, 30 * U);
         vm.prank(creator);
-        (bool ok, ) = address(escrow).call{gas: 150_000}(abi.encodeCall(escrow.pay, (id, worker)));
+        (bool ok, ) = address(escrow).call{gas: 150_000}(abi.encodeCall(escrow.pay, (id)));
         assertFalse(ok, "must not pay without the deductions");
         _pay(id);
         assertEq(p.owedOf(id, lender), 30 * U);
     }
 
+    /// A policy reverting with 300 KB costs the payout no more than one that does the same
+    /// work and returns nothing: the escrow copies back at most 32 bytes. (Copying all of it
+    /// would cost the escrow about 200,000 gas more.) Holds under any gas schedule.
     function test_large_return_data_costs_the_payout_nothing() public {
-        (ExampleEscrow ee, uint256 id) = _escrowWith(address(new LoudPolicy()));
-        vm.prank(creator);
-        (bool ok, ) = address(ee).call{gas: 400_000}(abi.encodeCall(ee.pay, (id, worker)));
-        assertTrue(ok, "only 32 bytes are copied back");
-        assertEq(worker.balance, 1 ether);
+        uint256 loud = _minGasToPay(address(new LoudPolicy()));
+        uint256 quiet = _minGasToPay(address(new QuietHeavyPolicy()));
+        emit log_named_uint("smallest paying budget, 300 KB of return data", loud);
+        emit log_named_uint("smallest paying budget, same work, no data   ", quiet);
+        assertLe(loud, quiet + 1_000, "only 32 bytes are copied back");
+    }
+
+    function _minGasToPay(address policy) internal returns (uint256 hi) {
+        (ExampleEscrow ee, uint256 id) = _escrowWith(policy);
+        uint256 lo = 100_000;
+        hi = 5_000_000;
+        while (lo + 1 < hi) {
+            uint256 mid = (lo + hi) / 2;
+            uint256 snap = vm.snapshotState();
+            vm.prank(creator);
+            (bool ok, ) = address(ee).call{gas: mid}(abi.encodeCall(ee.pay, (id)));
+            if (ok) assertEq(worker.balance, 1 ether);
+            vm.revertToState(snap);
+            if (ok) hi = mid; else lo = mid;
+        }
     }
 
     function test_no_gas_value_pays_without_the_deductions() public {
@@ -378,7 +406,7 @@ contract SettlementDeductionPolicyTest is Test {
         // Just below the smallest budget that settles, the refusal is the escrow's own
         // starvation check, not an incidental out-of-gas.
         vm.prank(creator);
-        (bool ok, bytes memory ret) = address(escrow).call{gas: hi - 1}(abi.encodeCall(escrow.pay, (id, worker)));
+        (bool ok, bytes memory ret) = address(escrow).call{gas: hi - 1}(abi.encodeCall(escrow.pay, (id)));
         assertFalse(ok);
         assertEq(ret, abi.encodeWithSignature("Error(string)", "Escrow: gas"), "starvation check");
     }
@@ -387,7 +415,7 @@ contract SettlementDeductionPolicyTest is Test {
     function _payWith(uint256 id, uint256 g) internal returns (bool ok) {
         uint256 snap = vm.snapshotState();
         vm.prank(creator);
-        (ok, ) = address(escrow).call{gas: g}(abi.encodeCall(escrow.pay, (id, worker)));
+        (ok, ) = address(escrow).call{gas: g}(abi.encodeCall(escrow.pay, (id)));
         if (ok) assertEq(p.owedOf(id, lender), 30 * U, "paid, so the lender must be in");
         vm.revertToState(snap);
     }
@@ -403,7 +431,7 @@ contract SettlementDeductionPolicyTest is Test {
         vm.expectEmit(address(ee));
         emit ISettlementCredit.DeductionsSkipped(id2, 1);
         vm.prank(creator);
-        ee.pay(id2, worker);
+        ee.pay(id2);
     }
 
     function test_tax_to_zero_treasury_blocks_creation() public {
@@ -411,7 +439,7 @@ contract SettlementDeductionPolicyTest is Test {
         vm.startPrank(creator);
         usd.approve(address(escrow), 1 * U);
         vm.expectRevert("Deductions: tax to zero");
-        escrow.createTask(address(usd), 1 * U);
+        escrow.createTask(address(usd), 1 * U, worker);
         vm.stopPrank();
     }
 }

@@ -10,7 +10,7 @@ import {ITaxSchedule} from "../src/interfaces/ITaxSchedule.sol";
 contract InterfaceIdsTest is Test {
     function test_interface_ids() public pure {
         assertEq(type(ISettlementDeductions).interfaceId, bytes4(0x77f547ff));
-        assertEq(type(ISettlementCredit).interfaceId, bytes4(0x3ff4db3a));
+        assertEq(type(ISettlementCredit).interfaceId, bytes4(0x3a440a3e));
         assertEq(type(ISettlementDeductionPolicy).interfaceId, bytes4(0x80ba847a));
         assertEq(type(ITaxSchedule).interfaceId, bytes4(0xbbb356a6));
     }

@@ -63,7 +63,7 @@ contract SpecCoverageTest is Test {
     function _task(ExampleEscrow e, uint256 amount) internal returns (uint256 id) {
         vm.startPrank(creator);
         usd.approve(address(e), amount);
-        id = e.createTask(address(usd), amount);
+        id = e.createTask(address(usd), amount, worker);
         vm.stopPrank();
     }
 
@@ -104,7 +104,7 @@ contract SpecCoverageTest is Test {
             vm.expectEmit(address(e));
             emit ISettlementCredit.DeductionsSkipped(id, 1);
             vm.prank(creator);
-            e.pay(id, worker);
+            e.pay(id);
             assertEq(usd.balanceOf(worker) - before, 100 * U);
         }
     }
@@ -115,7 +115,7 @@ contract SpecCoverageTest is Test {
         vm.expectEmit(address(e));
         emit ISettlementCredit.DeductionsSkipped(id, 1);
         vm.prank(creator);
-        e.pay{gas: 1_000_000}(id, worker);
+        e.pay{gas: 1_000_000}(id);
         assertEq(usd.balanceOf(worker), 100 * U);
     }
 
@@ -125,7 +125,7 @@ contract SpecCoverageTest is Test {
         vm.expectRevert("Escrow: nothing credited");
         e.withdrawCredit(id, address(p));
         vm.prank(creator);
-        e.pay(id, worker);
+        e.pay(id);
         vm.prank(rando);
         e.withdrawCredit(id, address(p)); // anyone; pays only the account
         assertEq(usd.balanceOf(address(p)), 1 * U);
@@ -143,10 +143,10 @@ contract SpecCoverageTest is Test {
         vm.startPrank(creator);
         vm.expectEmit(address(p));
         emit ISettlementDeductionPolicy.Deducted(id, 1, treasury, 1 * U);
-        e.payPart(id, worker, 100 * U); // tax 1 + repay 29
+        e.payPart(id, 100 * U); // tax 1 + repay 29
         vm.expectEmit(address(p));
         emit ISettlementDeductionPolicy.Deducted(id, 2, treasury, 1 * U);
-        e.payPart(id, worker, 100 * U); // tax 1 + repay 21
+        e.payPart(id, 100 * U); // tax 1 + repay 21
         uint256 before = usd.balanceOf(creator);
         e.refund(id);                   // the last 100 comes back whole
         vm.stopPrank();
@@ -190,6 +190,149 @@ contract SpecCoverageTest is Test {
         assertLt(g, e.DEDUCTION_GAS(), "worst case must fit G");
     }
 
+    /// The payee is fixed when the task is created: the escrow has no way to pay anyone else,
+    /// so the payee's assignments cannot be skipped.
+    function test_the_payee_is_fixed_before_the_payout() public {
+        (SettlementDeductionPolicy p, ExampleEscrow e) = _deploy(schedule, 5000);
+        vm.startPrank(creator);
+        usd.approve(address(e), 100 * U);
+        vm.expectRevert("Escrow: bad payee");
+        e.createTask(address(usd), 100 * U, address(0));
+        vm.stopPrank();
+        uint256 id = _task(e, 100 * U);
+        vm.prank(worker);
+        p.assignPayment(id, lender, 0, 30 * U);
+        vm.prank(creator);
+        e.pay(id);
+        assertEq(usd.balanceOf(worker), 69 * U, "the fixed payee, minus tax and repayment");
+        assertEq(p.owedOf(id, lender), 30 * U);
+    }
+
+    /// A token address without code returns nothing from a call, which must not count as a
+    /// transfer: neither when funding a task nor when the policy pays a recipient.
+    function test_an_asset_without_code_is_not_a_transfer() public {
+        (SettlementDeductionPolicy p, ExampleEscrow e) = _deploy(schedule, 5000);
+        vm.prank(creator);
+        vm.expectRevert("Escrow: transfer failed");
+        e.createTask(address(0xDEAD), 100 * U, worker);
+
+        uint256 id = _task(e, 100 * U);
+        vm.prank(creator);
+        e.pay(id);
+        e.withdrawCredit(id, address(p)); // the tax reaches the policy
+        vm.etch(address(usd), "");       // the token's code is gone
+        vm.expectRevert("Deductions: transfer failed");
+        p.claim(id, treasury);
+        assertEq(p.owedOf(id, treasury), 1 * U, "still owed");
+    }
+
+    /// No payout creates storage in the policy: every slot `deductions` writes was allocated
+    /// at task creation or assignment, and stays allocated after claims. Covers the first
+    /// payout, later payouts, payouts after every recipient has claimed, and an assignment
+    /// running out.
+    function test_deductions_create_no_storage() public {
+        (SettlementDeductionPolicy p, ExampleEscrow e) = _deploy(schedule, 10_000);
+        uint256 id = _task(e, 400 * U);
+        address[4] memory rs = [address(0x5001), address(0x5002), address(0x5003), address(0x5004)];
+        vm.startPrank(worker);
+        p.assignPayment(id, rs[0], 300, 0);       // a rate
+        p.assignPayment(id, rs[1], 0, 5 * U);     // runs out on the first payout
+        p.assignPayment(id, rs[2], 0, 15 * U);
+        p.assignPayment(id, rs[3], 0, 1_000 * U);
+        vm.stopPrank();
+        vm.prank(rs[2]);
+        p.release(id, worker); // a released assignment is written no more either
+        for (uint256 k = 0; k < 4; k++) {
+            _payWithoutCreating(p, e, id, 100 * U);
+            if (k == 1) {
+                p.claim(id, treasury);
+                for (uint256 i = 0; i < 4; i++) if (p.owedOf(id, rs[i]) > 0) p.claim(id, rs[i]);
+            }
+        }
+        assertEq(p.owedOf(id, rs[1]), 0);
+        assertGt(p.owedOf(id, rs[3]), 0);
+    }
+
+    function _payWithoutCreating(SettlementDeductionPolicy p, ExampleEscrow e, uint256 id, uint256 amount) internal {
+        vm.startStateDiffRecording();
+        vm.prank(creator);
+        e.payPart(id, amount);
+        Vm.AccountAccess[] memory accesses = vm.stopAndReturnStateDiff();
+        uint256 writes;
+        for (uint256 i = 0; i < accesses.length; i++) {
+            Vm.StorageAccess[] memory s = accesses[i].storageAccesses;
+            for (uint256 j = 0; j < s.length; j++) {
+                if (s[j].account != address(p) || !s[j].isWrite || s[j].reverted) continue;
+                writes++;
+                assertTrue(s[j].previousValue != bytes32(0), "payout wrote a slot that was zero");
+            }
+        }
+        assertGt(writes, 0, "the policy did record the payout");
+    }
+
+    /// The paths most likely to need a new slot: an assignment made before the task exists,
+    /// the treasury also an assignee, the same recipient twice and on another payee's task,
+    /// release, compaction and reassignment, claims in between.
+    function test_no_storage_is_created_on_the_edge_paths() public {
+        (SettlementDeductionPolicy p, ExampleEscrow e) = _deploy(schedule, 10_000);
+        address worker2 = address(0xCAF2);
+        vm.prank(worker);
+        p.assignPayment(0, lender, 0, 7 * U); // task 0 does not exist yet
+        uint256 id = _task(e, 1_000 * U);
+        assertEq(id, 0);
+        vm.startPrank(creator);
+        usd.approve(address(e), 1_000 * U);
+        uint256 id2 = e.createTask(address(usd), 1_000 * U, worker2);
+        vm.stopPrank();
+        vm.startPrank(worker);
+        p.assignPayment(id, treasury, 100, 0);
+        p.assignPayment(id, referrer, 0, 3 * U);
+        p.assignPayment(id, referrer, 50, 0);
+        vm.stopPrank();
+        vm.prank(worker2);
+        p.assignPayment(id2, lender, 0, 2 * U);
+        _payWithoutCreating(p, e, id, 100 * U);
+        _payWithoutCreating(p, e, id2, 100 * U);
+        p.claim(id, lender);
+        p.claim(id, treasury);
+        p.claim(id, referrer);
+        p.claim(id2, lender);
+        vm.prank(referrer);
+        p.release(id, worker);
+        vm.prank(worker);
+        p.assignPayment(id, address(0xA55), 0, 1_000 * U); // compacts the full list
+        assertEq(p.assignmentsOf(id, worker).length, 2);
+        for (uint256 k = 0; k < 4; k++) {
+            _payWithoutCreating(p, e, id, 100 * U);
+            if (k == 1) {
+                p.claim(id, treasury);
+                p.claim(id, address(0xA55));
+            }
+        }
+    }
+
+    /// A task the escrow never announced is refused: the payout settles in full with
+    /// DeductionsSkipped, instead of the policy creating storage and miscounting the task.
+    function test_a_task_never_announced_is_refused() public {
+        SettlementDeductionPolicy p = new SettlementDeductionPolicy(address(this), ITaxSchedule(address(0)), 5000);
+        vm.prank(worker);
+        p.assignPayment(42, lender, 0, 30 * U);
+        vm.expectRevert("Deductions: unknown task");
+        p.deductions(42, 1, worker, 100 * U);
+    }
+
+    /// A policy whose code is gone cannot answer: the payout settles in full and says so.
+    function test_a_policy_without_code_is_skipped() public {
+        (SettlementDeductionPolicy p, ExampleEscrow e) = _deploy(schedule, 5000);
+        uint256 id = _task(e, 100 * U);
+        vm.etch(address(p), "");
+        vm.expectEmit(address(e));
+        emit ISettlementCredit.DeductionsSkipped(id, 1);
+        vm.prank(creator);
+        e.pay(id);
+        assertEq(usd.balanceOf(worker), 100 * U);
+    }
+
     // ------------------------------------------------------------ section 7: profile
     function test_zero_rate_locks_nothing() public {
         schedule.set(treasury, 0);
@@ -213,11 +356,11 @@ contract SpecCoverageTest is Test {
         p.assignPayment(id, lender, 0, 50 * U); // made second
         vm.stopPrank();
         vm.startPrank(creator);
-        e.payPart(id, worker, 100 * U); // budget 10: tax 1, fee 5, repay 4
+        e.payPart(id, 100 * U); // budget 10: tax 1, fee 5, repay 4
         assertEq(p.owedOf(id, treasury), 1 * U);
         assertEq(p.owedOf(id, referrer), 5 * U);
         assertEq(p.owedOf(id, lender), 4 * U);
-        e.payPart(id, worker, 100 * U); // the same again; 42 still to repay
+        e.payPart(id, 100 * U); // the same again; 42 still to repay
         vm.stopPrank();
         assertEq(p.owedOf(id, lender), 8 * U);
         assertEq(p.assignmentsOf(id, worker)[1].remaining, 42 * U);
@@ -228,7 +371,7 @@ contract SpecCoverageTest is Test {
         uint256 id = _task(e, 99); // 1% of 99 rounds to 0
         vm.recordLogs();
         vm.prank(creator);
-        e.pay(id, worker);
+        e.pay(id);
         Vm.Log[] memory logs = vm.getRecordedLogs();
         for (uint256 i = 0; i < logs.length; i++) {
             assertTrue(logs[i].topics[0] != ISettlementCredit.SettlementDeducted.selector);
@@ -248,7 +391,7 @@ contract SpecCoverageTest is Test {
         p.assignPayment(id, lender, 0, 30 * U); // accepted, but the cap leaves no room
         vm.stopPrank();
         vm.prank(creator);
-        e.pay(id, worker);
+        e.pay(id);
         assertEq(usd.balanceOf(worker), 100 * U);
         assertEq(p.owedOf(id, lender), 0);
     }
@@ -259,7 +402,7 @@ contract SpecCoverageTest is Test {
         vm.prank(worker);
         p.assignPayment(id, lender, 0, 100 * U);
         vm.prank(creator);
-        e.pay(id, worker);
+        e.pay(id);
         assertEq(usd.balanceOf(worker), 0);
         p.claim(id, lender);
         assertEq(usd.balanceOf(lender), 100 * U);
@@ -281,7 +424,7 @@ contract SpecCoverageTest is Test {
         vm.expectRevert("Deductions: nothing to release");
         p.release(id, worker);
         vm.prank(creator);
-        e.pay(id, worker);
+        e.pay(id);
         assertEq(p.owedOf(id, referrer), 0);
         assertEq(p.owedOf(id, lender), 30 * U);
     }
@@ -292,7 +435,7 @@ contract SpecCoverageTest is Test {
         vm.expectRevert("Deductions: nothing owed");
         p.claim(id, treasury);
         vm.prank(creator);
-        e.pay(id, worker);
+        e.pay(id);
         p.claim(id, treasury);
         vm.expectRevert("Deductions: nothing owed");
         p.claim(id, treasury);
@@ -301,11 +444,11 @@ contract SpecCoverageTest is Test {
     function test_native_coin_withdrawn_by_a_third_party() public {
         (SettlementDeductionPolicy p, ExampleEscrow e) = _deploy(schedule, 5000);
         vm.prank(creator);
-        uint256 id = e.createTask{value: 10 ether}(address(0), 10 ether);
+        uint256 id = e.createTask{value: 10 ether}(address(0), 10 ether, worker);
         vm.prank(worker);
         p.assignPayment(id, lender, 0, 3 ether);
         vm.prank(creator);
-        e.pay(id, worker);
+        e.pay(id);
         vm.prank(rando);
         e.withdrawCredit(id, address(p));
         p.claim(id, lender);
@@ -370,7 +513,7 @@ contract SpecCoverageTest is Test {
         for (uint256 k = 0; k < parts; k++) {
             uint256 part = k + 1 == parts ? amount - paid : amount / parts;
             if (part == 0) continue;
-            e.payPart(id, worker, part);
+            e.payPart(id, part);
             paid += part;
         }
         vm.stopPrank();

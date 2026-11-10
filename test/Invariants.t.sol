@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: CC0-1.0
 pragma solidity ^0.8.24;
 
-import {Test} from "forge-std/Test.sol";
+import {Test, Vm} from "forge-std/Test.sol";
 import {SettlementDeductionPolicy} from "../src/SettlementDeductionPolicy.sol";
 import {ExampleEscrow} from "../src/examples/ExampleEscrow.sol";
 import {USD, Schedule} from "./SettlementDeductionPolicy.t.sol";
+import {BlockingUSD} from "./Hardening.t.sol";
 
 /// Drives an escrow and its policy through random sequences of everything any party can
 /// do: create, assign, pay in parts, refund, withdraw credit as a stranger, claim, release,
@@ -23,6 +24,7 @@ contract Handler is Test {
 
     uint256[] public tasks;
     mapping(uint256 => uint256) public remaining;      // ghost: still escrowed per task
+    mapping(uint256 => address) public payeeOf;        // fixed at creation
     mapping(uint256 => uint256) public deductedOn;     // ghost: credited to the policy per task
     mapping(uint256 => uint256) public claimedOn;      // ghost: paid out on claims per task
     uint256 public minted;
@@ -31,9 +33,11 @@ contract Handler is Test {
     uint256 public compactions;
     uint256 public releases;
     uint256 public strangerWithdrawals;
+    uint256 public payeeCredits;      // payouts that were credited because the payee was blocked
+    uint256 public payeeWithdrawals;
 
     constructor() {
-        usd = new USD();
+        usd = USD(address(new BlockingUSD()));
         schedule = new Schedule();
         schedule.set(TREASURY, 100);
         address next = vm.computeCreateAddress(address(this), vm.getNonce(address(this)) + 1);
@@ -50,17 +54,19 @@ contract Handler is Test {
     /// Few tasks, so that actions pile up on the same ones.
     uint256 public constant MAX_TASKS = 2;
 
-    function create(uint256 amount) external {
+    function create(uint256 amount, uint256 w) external {
         if (tasks.length == MAX_TASKS) return;
         amount = bound(amount, 1, 1e12);
+        address payee = workers[w % 3];
         usd.mint(CREATOR, amount);
         minted += amount;
         vm.startPrank(CREATOR);
         usd.approve(address(e), amount);
-        uint256 id = e.createTask(address(usd), amount);
+        uint256 id = e.createTask(address(usd), amount, payee);
         vm.stopPrank();
         tasks.push(id);
         remaining[id] = amount;
+        payeeOf[id] = payee;
     }
 
     /// Assignments are the subtle part (order, cap, compaction), so they get extra weight.
@@ -71,7 +77,8 @@ contract Handler is Test {
     function assign(uint256 taskSeed, uint256 w, uint256 r, uint16 bps, uint256 amount, bool isRate) public {
         (bool ok, uint256 id) = _taskAt(taskSeed);
         if (!ok) return;
-        address payee = workers[w % 3];
+        // Mostly on the task's own payee, whose payouts actually read them.
+        address payee = w % 4 == 3 ? workers[w % 3] : payeeOf[id];
         SettlementDeductionPolicy.Assignment[] memory before = p.assignmentsOf(id, payee);
         bool full = before.length == p.MAX_ASSIGNMENTS();
         uint256 active;
@@ -109,18 +116,31 @@ contract Handler is Test {
         assertEq(x.remaining, y.remaining, "remaining kept");
     }
 
-    function pay(uint256 taskSeed, uint256 w, uint256 amount) external {
+    function pay(uint256 taskSeed, uint256 amount) external {
         (bool ok, uint256 id) = _taskAt(taskSeed);
         if (!ok || remaining[id] == 0) return;
         amount = bound(amount, 1, remaining[id]);
-        address payee = workers[w % 3];
+        address payee = payeeOf[id];
         uint256 before = usd.balanceOf(payee);
         uint256 creditBefore = e.creditOf(id, address(p));
+        uint256 payeeCreditBefore = e.creditOf(id, payee);
         vm.prank(CREATOR);
-        e.payPart(id, payee, amount);
+        vm.startStateDiffRecording();
+        e.payPart(id, amount);
+        Vm.AccountAccess[] memory acc = vm.stopAndReturnStateDiff();
+        for (uint256 i = 0; i < acc.length; i++) {
+            Vm.StorageAccess[] memory s = acc[i].storageAccesses;
+            for (uint256 j = 0; j < s.length; j++) {
+                if (s[j].account != address(p) || !s[j].isWrite || s[j].reverted) continue;
+                assertTrue(s[j].previousValue != bytes32(0), "a payout wrote a slot that was zero");
+            }
+        }
         uint256 got = usd.balanceOf(payee) - before;
         uint256 d = e.creditOf(id, address(p)) - creditBefore;
-        assertEq(got + d, amount, "payout split exactly");
+        uint256 credited = e.creditOf(id, payee) - payeeCreditBefore;
+        assertEq(got + credited + d, amount, "payout split exactly");
+        assertTrue(got == 0 || credited == 0, "paid or credited, not both");
+        if (credited > 0) payeeCredits++;
         assertLe(d, amount * CAP / 10_000, "cap");
         remaining[id] -= amount;
         deductedOn[id] += d;
@@ -182,6 +202,24 @@ contract Handler is Test {
         releases++;
     }
 
+    /// The asset's issuer blocks or unblocks a payee: payouts to it are then credited.
+    function blockPayee(uint256 w, bool on) external {
+        BlockingUSD(address(usd)).setBlocked(workers[w % 3], on);
+    }
+
+    /// A payee (or anyone for it) withdraws payout credit once it can receive again.
+    function payeeWithdraws(uint256 taskSeed) external {
+        (bool ok, uint256 id) = _taskAt(taskSeed);
+        if (!ok) return;
+        address payee = payeeOf[id];
+        uint256 c = e.creditOf(id, payee);
+        if (c == 0 || BlockingUSD(address(usd)).blocked(payee)) return;
+        uint256 before = usd.balanceOf(payee);
+        e.withdrawCredit(id, payee);
+        assertEq(usd.balanceOf(payee) - before, c, "credit withdrawn whole");
+        payeeWithdrawals++;
+    }
+
     function setTax(uint16 bps) external {
         schedule.set(TREASURY, uint16(bound(bps, 0, CAP)));
     }
@@ -212,7 +250,7 @@ contract InvariantsTest is Test {
         uint256 owed;
         for (uint256 i = 0; i < h.tasksLength(); i++) {
             uint256 id = h.tasks(i);
-            owed += h.remaining(id) + h.e().creditOf(id, address(h.p()));
+            owed += h.remaining(id) + h.e().creditOf(id, address(h.p())) + h.e().creditOf(id, h.payeeOf(id));
         }
         assertEq(h.usd().balanceOf(address(h.e())), owed);
     }
