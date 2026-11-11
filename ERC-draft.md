@@ -1,9 +1,9 @@
 ---
-eip: TBD
+eip: 8492
 title: Settlement Deductions for Task Escrows
 description: A fixed policy that an escrow asks at every payout how much to withhold for third parties, without being able to stall settlement
 author: Ben (@unicore-gpu)
-discussions-to: https://ethereum-magicians.org/t/erc-settlement-deductions-for-task-escrows/30323
+discussions-to: https://ethereum-magicians.org/t/erc-8492-settlement-deductions-for-task-escrows/30323
 status: Draft
 type: Standards Track
 category: ERC

@@ -1,8 +1,8 @@
 # Settlement Deductions
 
-A draft ERC and reference implementation for withholding part of an escrowed payment
-(a tax, a referral fee, a loan repayment) at the moment it is paid out, without the
-escrow knowing any of the rules and without ever blocking the payment.
+A draft ERC (ERC-8492) and reference implementation for withholding part of an escrowed
+payment (a tax, a referral fee, a loan repayment) at the moment it is paid out, without
+the escrow knowing any of the rules and without ever blocking the payment.
 
 ```
 payout 100
@@ -49,7 +49,9 @@ forge test
 This is a draft standard. The interfaces may change during discussion. The code has not
 been audited; do not use it to hold real funds.
 
-Discussion: [Ethereum Magicians](https://ethereum-magicians.org/t/erc-settlement-deductions-for-task-escrows/30323).
+Discussion: [Ethereum Magicians](https://ethereum-magicians.org/t/erc-8492-settlement-deductions-for-task-escrows/30323).
+
+Pull request: [ethereum/ERCs#2157](https://github.com/ethereum/ERCs/pull/2157).
 
 ## License
 
