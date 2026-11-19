@@ -424,12 +424,14 @@ contract SettlementDeductionPolicyTest is Test {
     function test_escrow_events() public {
         uint256 id = _task(100 * U);
         vm.expectEmit(address(escrow));
-        emit ISettlementCredit.SettlementDeducted(id, 1, address(p), 1 * U);
+        emit ISettlementCredit.PayoutSettled(id, 1, worker, 100 * U, 1 * U);
         _pay(id);
 
         (ExampleEscrow ee, uint256 id2) = _escrowWith(address(new RevertingPolicy()));
         vm.expectEmit(address(ee));
         emit ISettlementCredit.DeductionsSkipped(id2, 1);
+        vm.expectEmit(address(ee));
+        emit ISettlementCredit.PayoutSettled(id2, 1, worker, 1 ether, 0); // logged all the same
         vm.prank(creator);
         ee.pay(id2);
     }

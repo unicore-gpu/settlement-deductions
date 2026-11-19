@@ -16,9 +16,21 @@ contract InterfaceIdsTest is Test {
     }
 
     function test_event_topics() public pure {
-        assertEq(keccak256("SettlementDeducted(uint256,uint256,address,uint256)"),
-                 0xd6a50990fa5d56f79112ecd39bb97ad451c1b9cea471098009151950b037826d);
+        assertEq(keccak256("PayoutSettled(uint256,uint256,address,uint256,uint256)"),
+                 0x5ea26080db4e57a546bd3bde39877f04221f27cd135c547140004d8ed8874eb9);
         assertEq(keccak256("DeductionsSkipped(uint256,uint256)"),
                  0x12518d49b1ef011e575513a1e510df3de4f1682fcef7750bea4d80717e6e54d1);
+        assertEq(keccak256("PayoutCredited(uint256,uint256,address,uint256)"),
+                 0x04ab8430152b57cce04ae8ca52ad44317ee26f1d8c7646697e3e65b7d9fc988b);
+        assertEq(keccak256("PayoutWithdrawn(uint256,address,uint256)"),
+                 0xd1a15b9173e0bd19f4a0af7e8662bbbacb41e5c41d6f477ede54b32345d0b97c);
+        assertEq(ISettlementCredit.PayoutSettled.selector,
+                 0x5ea26080db4e57a546bd3bde39877f04221f27cd135c547140004d8ed8874eb9);
+        assertEq(ISettlementCredit.DeductionsSkipped.selector,
+                 0x12518d49b1ef011e575513a1e510df3de4f1682fcef7750bea4d80717e6e54d1);
+        assertEq(ISettlementCredit.PayoutCredited.selector,
+                 0x04ab8430152b57cce04ae8ca52ad44317ee26f1d8c7646697e3e65b7d9fc988b);
+        assertEq(ISettlementCredit.PayoutWithdrawn.selector,
+                 0xd1a15b9173e0bd19f4a0af7e8662bbbacb41e5c41d6f477ede54b32345d0b97c);
     }
 }

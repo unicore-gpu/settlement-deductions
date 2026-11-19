@@ -333,6 +333,52 @@ contract SpecCoverageTest is Test {
         assertEq(usd.balanceOf(worker), 100 * U);
     }
 
+    /// Section 4 events: a reader can account for every unit of a task from the escrow's
+    /// logs alone. Each payout logs its payee, amount and deduction, `d` = 0 included, and
+    /// each withdrawal logs what left the escrow and for whom.
+    function test_every_unit_is_accounted_for_from_the_logs() public {
+        (SettlementDeductionPolicy p, ExampleEscrow e) = _deploy(schedule, 5000);
+        uint256 id = _task(e, 300 * U);
+        vm.prank(worker);
+        p.assignPayment(id, lender, 0, 30 * U);
+
+        vm.recordLogs();
+        vm.startPrank(creator);
+        e.payPart(id, 100 * U); // tax 1 + repayment 30
+        e.payPart(id, 99);      // tax rounds to 0, repayment done: d = 0
+        e.pay(id);              // the rest, 199.999901: tax only, 1.999999
+        vm.stopPrank();
+        vm.prank(rando);
+        e.withdrawCredit(id, address(p));
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+
+        uint256 payouts; uint256 paidOut; uint256 deducted; uint256 withdrawn;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].emitter != address(e)) continue;
+            bytes32 t = logs[i].topics[0];
+            if (t == ISettlementCredit.PayoutSettled.selector) {
+                assertEq(uint256(logs[i].topics[1]), id);
+                assertEq(uint256(logs[i].topics[2]), ++payouts, "settlement ids in order");
+                assertEq(address(uint160(uint256(logs[i].topics[3]))), worker);
+                (uint256 a, uint256 d) = abi.decode(logs[i].data, (uint256, uint256));
+                paidOut += a;
+                deducted += d;
+            } else if (t == ISettlementCredit.PayoutWithdrawn.selector) {
+                assertEq(uint256(logs[i].topics[1]), id);
+                assertEq(address(uint160(uint256(logs[i].topics[2]))), address(p));
+                withdrawn += abi.decode(logs[i].data, (uint256));
+            }
+            assertTrue(t != ISettlementCredit.DeductionsSkipped.selector);
+            assertTrue(t != ISettlementCredit.PayoutCredited.selector);
+        }
+        assertEq(payouts, 3, "every payout logged, the d = 0 one included");
+        assertEq(paidOut, 300 * U, "amount: the whole escrow");
+        assertEq(deducted, 32_999_999);
+        assertEq(usd.balanceOf(worker), paidOut - deducted, "amount = paid + deducted");
+        assertEq(withdrawn, deducted - e.creditOf(id, address(p)), "deducted = withdrawn + credit");
+        assertEq(usd.balanceOf(address(p)), withdrawn);
+    }
+
     // ------------------------------------------------------------ section 7: profile
     function test_zero_rate_locks_nothing() public {
         schedule.set(treasury, 0);
@@ -373,10 +419,17 @@ contract SpecCoverageTest is Test {
         vm.prank(creator);
         e.pay(id);
         Vm.Log[] memory logs = vm.getRecordedLogs();
+        uint256 settled;
         for (uint256 i = 0; i < logs.length; i++) {
-            assertTrue(logs[i].topics[0] != ISettlementCredit.SettlementDeducted.selector);
             assertTrue(logs[i].topics[0] != ISettlementDeductionPolicy.Deducted.selector);
+            if (logs[i].topics[0] == ISettlementCredit.PayoutSettled.selector) {
+                settled++;
+                (uint256 amount, uint256 deducted) = abi.decode(logs[i].data, (uint256, uint256));
+                assertEq(amount, 99);
+                assertEq(deducted, 0, "logged even when nothing is taken");
+            }
         }
+        assertEq(settled, 1);
         assertFalse(_skipped(logs));
         assertEq(usd.balanceOf(worker), 99);
         assertEq(e.creditOf(id, address(p)), 0);
