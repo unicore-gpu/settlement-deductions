@@ -96,7 +96,7 @@ contract HardeningTest is Test {
         vm.prank(payee);
         p.assignPayment(id, lender, 0, 3 ether);
         vm.expectEmit(address(e));
-        emit ExampleEscrow.PayoutCredited(id, 1, payee, 6.9 ether);
+        emit ISettlementCredit.PayoutCredited(id, 1, payee, 6.9 ether);
         vm.prank(creator);
         e.pay(id); // does not revert, so the creator has no reason to refund instead
         assertEq(e.creditOf(id, payee), 6.9 ether);
