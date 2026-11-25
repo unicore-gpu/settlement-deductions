@@ -17,14 +17,14 @@ every payout: how much of this payment do you take? It pays the payee the rest a
 the amount taken to the policy, which divides it among its recipients. A failing or
 misbehaving policy is skipped and the payee is paid in full.
 
-The specification is in [ERC-draft.md](ERC-draft.md). Status: **Draft**, not yet submitted
-to [ethereum/ERCs](https://github.com/ethereum/ERCs).
+The specification is in [ERC-draft.md](ERC-draft.md). Status: **Draft**, submitted to
+[ethereum/ERCs](https://github.com/ethereum/ERCs) (pull request below).
 
 ## Contents
 
 | Path | What it is |
 |---|---|
-| `src/interfaces/ISettlementDeductions.sol` | The policy interface and the escrow's credit interface (`ISettlementCredit`) |
+| `src/interfaces/ISettlementDeductions.sol` | The policy interface, the escrow's credit interface (`ISettlementCredit`) and the optional `ISettlementVault` |
 | `src/interfaces/ISettlementDeductionPolicy.sol` | The optional reference-policy profile |
 | `src/interfaces/ITaxSchedule.sol` | A tax schedule the reference policy reads at task creation |
 | `src/SettlementDeductionPolicy.sol` | Reference policy: tax locked per task, payee-made assignments only their recipient can release, one cap, permissionless claims |
